@@ -1,13 +1,25 @@
+#-- Heads up! -- 
+# If this file is in the top-level directory, it won't run unless you have been given access to /src.
+# 
+# - Why isn't /src public?
+# ritV contains sensitive algorithms regarding data storage, validation, and authentication. As a result, it is gitignored, and an encrypted version is provided instead under /dist
+#
+# - How can I get credentials for the ritV package?
+# ritV uses a shared database across multiple RIT communities. You can get credentials by contacting @mae.red on Discord
+
+try:
+    from src.ritV import ritV
+    from src import styles
+    from src.errors import *
+except:
+    print('/src is missing. Please try running main.py under the working directory \'dist3\' ')
 import discord
 from discord.ext import commands, tasks
 import datetime
-from src.ritV import ritV
 import aiohttp
 import time
 from rich.console import Console
-from src.errors import *
 import utils
-from src import styles
 from mcrcon import MCRcon
 import requests
 import os
@@ -16,37 +28,59 @@ from rich.prompt import Prompt
 
 console= Console()
 
-
 verif = ritV(console)
-if os.path.exists('bot.token'):
-    with open('bot.token', 'rb') as token_file:
-        token = pickle.load(token_file)
+
+def test_rcon():
+    with MCRcon(mc_server_ip, mc_server_rcon_pwd) as mcr:
+            resp = mcr.command("/list").split(' of')[0].split('are ')[1]
+            console.print(f'↳ Connected to server! {resp} players online.')
+
+def check_minecraft_username(username):
+    try:
+        url = f"https://api.mojang.com/users/profiles/minecraft/{username}"
+        response = requests.get(url)
+        if response.status_code == 200:
+            return True
+        elif response.status_code == 204:
+            return False
+        else:
+            response.raise_for_status()
+    except:
+        return 
+
+if os.path.exists('bot.credentials'):
+    with open('bot.credentials', 'rb') as file:
+        token,mc_server_name,mc_server_ip,mc_server_rcon_pwd = pickle.load(file)
 else:
     token = Prompt.ask("[bold]Initial bot setup:[not bold]\n↳ Please enter a Discord token")
-    with open('bot.token', 'wb') as token_file:
-        pickle.dump(token, token_file)
+    console.print('For the next steps, [bold]please make sure that your Minecraft Server is running[not bold] and that [bold]RCON is enabled[not bold]on the default port.')
+    mc_server_name = Prompt.ask("↳ Please enter the name of the Minecraft Server")
+    while(True):
+        mc_server_ip = Prompt.ask("↳ Please enter the IP adress of the Minecraft Server") # 51.222.254.78
+        mc_server_rcon_pwd = Prompt.ask("↳ Please enter the RCON password of the Minecraft Server") # Grav1rattat
+        console.print('↳ Attempting to connect to rcon...',end='')
+        try:
+            test_rcon()
+            console.print(' Success!',style=styles.success)
+            break
+        except Exception as e:
+            console.print('\n↳ Failed to connect to RCON. Please try again.',style=styles.critical_error)
+            console.print(e)
+    with open('bot.credentials', 'wb') as file:
+        pickle.dump((token,mc_server_name,mc_server_ip,mc_server_rcon_pwd), file)
 bot = commands.Bot(intents=discord.Intents.all())
 console.print('↳ Loading configuration...')
 guilds=["1151963835515813890"]
 invites = {}
 
-def check_minecraft_username(username):
-    url = f"https://api.mojang.com/users/profiles/minecraft/{username}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return True
-    elif response.status_code == 204:
-        return False
-    else:
-        response.raise_for_status()
-
 async def apply_verification(user:discord.User,first = False):
     await user.add_roles(role_verified,role_not_whitelisted)
     embed = discord.Embed(title="You've been verified!",description="Be sure to check out https://discord.com/channels/1151963835515813890/1170861611653812244 to be whitelisted on the Minecraft Server.",color=discord.Color.nitro_pink())
-#     if first:
-#         embed.add_field(name='You\'ve also been granted access to:',value='''
-# - [RIT Freshmen Discord](https://discord.gg/P9qd46x9B4)
-# ''')
+    # for future implementation once the bot is fully synchronized
+    #   if first:
+    #         embed.add_field(name='You\'ve also been granted access to:',value='''
+    # - [RIT Freshmen Discord](https://discord.gg/P9qd46x9B4)
+    # ''')
     credits = discord.Embed(title="⟶ keeping communities safer.",description="a  verification solution developed, hosted, and maintained by [mae.red](https://mae.red). please consider **[donating](https://www.buymeacoffee.com/maedotred)** to support my efforts :)",color=discord.Color.from_rgb(255,255,255))
     try:
         await user.add_roles(role_verified,role_not_whitelisted)
@@ -79,15 +113,11 @@ async def on_ready():
     # Shorthands - be extra careful when setting IDs here!
     console.print('↳ Fetching roles and channels...')
     # ----------------------------------------------------------------------------
-    global channel_mod 
+    global channel_mod,channel_hooks,role_verified,role_not_whitelisted,channel_verify
     channel_mod = await bot.fetch_channel(1152437009453953155)
-    global channel_hooks
     channel_hooks = await bot.fetch_channel(1154882083827744778)
-    global role_verified
     role_verified = roleByID(1153773046973337620)
-    global role_not_whitelisted
     role_not_whitelisted = roleByID(1170869083189809243)
-    global channel_verify
     channel_verify=await bot.fetch_channel(1169808832344641616)
     # ----------------------------------------------------------------------------
     console.print('↳ Fetching invites...')
@@ -97,20 +127,15 @@ async def on_ready():
         invites[i.code] = i.uses
     console.print(f'  ↳ {len(invites)} invites loaded.')
     refreshInvites.start()
-    
     console.print('  ↳ Invite refresh timer started.')
-    # console.print(invites)
     console.print('↳ Adding views...')
     bot.add_view(VerificationMenu())
     bot.add_view(WhitelistMenu())
     console.print(f'  ↳ {len(bot.persistent_views)} views loaded.')
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="Gravitron MC"))
-
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=mc_server_name))
     console.print('↳ Testing RCON connection...')
     try:
-        with MCRcon("51.222.254.78", "Grav1rattat") as mcr:
-            resp = mcr.command("/list").split(' of')[0].split('are ')[1]
-            console.print(f'↳ Connected to server! {resp} players online.')
+        test_rcon()
     except Exception as e:
         console.print('↳ Failed to connect to RCON.',style=styles.critical_error)
         console.print(e)
@@ -167,7 +192,7 @@ class VerificationEmailModal(discord.ui.Modal):
 
 class VerificationMenu(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None) # timeout of the view must be set to None    
+        super().__init__(timeout=None) 
     @discord.ui.button(label="Verify my RIT Email", style=discord.ButtonStyle.green, emoji="✅",custom_id="VerifyButton") 
     async def button_callback(self, button, interaction:discord.Interaction):
         if verif.is_verified(interaction.user.id):
@@ -210,10 +235,9 @@ class VerificationCodeModal(discord.ui.Modal):
 # ------------------------------------------------------------------------------
 
 @bot.slash_command(guild_ids=guilds)
-@commands.has_role('Server Management')
+@commands.has_role('Developer')
 async def testdm(ctx,member:discord.Option(discord.Member)):
     await ctx.respond(str(await utils.checkDMs(member)),ephemeral=True)
-    
 
 async def memberAlert(title:str, member:discord.Member):
     '''Warn the mod chat with information about a member.'''
@@ -236,12 +260,12 @@ class WhitelistModal(discord.ui.Modal):
     def __init__(self, *args, **kwargs) -> None:
 
         super().__init__(*args, **kwargs)
-        self.add_item(discord.ui.InputText(label="ab1234@rit.edu", min_length=3, max_length=16))
+        self.add_item(discord.ui.InputText(label="Your Minecraft Username", min_length=3, max_length=16))
 
     async def callback(self, interaction: discord.Interaction):
         ign = self.children[0].value
         if check_minecraft_username(ign):
-            with MCRcon("51.222.254.78", "Grav1rattat") as mcr:
+            with MCRcon(mc_server_ip, mc_server_rcon_pwd) as mcr:
                 mcr.command(f"/whitelist add {ign}")
                 mcr.command(f"/whitelist reload")
                 console.print(f'Sueccessfully whitelisted `{ign}`!',style=styles.success)
@@ -266,7 +290,7 @@ async def getchannelmembers(ctx: discord.ApplicationContext, channel: discord.Op
 # Killswitch
 # ------------------------------------------------------------------------------
 @bot.slash_command(guild_ids=guilds)
-@commands.has_role('Server Management')
+@commands.has_role('Developer')
 async def kill(ctx):
     exit()
 
@@ -318,10 +342,30 @@ async def on_message(message: discord.Message):
             await message.channel.send("# Welcome!",embed=embed,view=VerificationMenu())
             await message.delete()
         if "!sendWhitelistModal" in message.content: # mf slash commands won't sync    
-            embed = discord.Embed(title="Get access!",description="Thank you for verifying. Click below to enter your minecraft IGN and get access to the server.",colour=discord.Color.from_rgb(255,255,255))
-            await message.channel.send("# Welcome to __Gravitron MC__!",embed=embed,view=WhitelistMenu())
+            embed = discord.Embed(title="Get access!",description="Thank you for verifying. Click below to enter your Minecraft IGN and get access to the server.",colour=discord.Color.from_rgb(255,255,255))
+            await message.channel.send(f"# Welcome to __{mc_server_name}__!",embed=embed,view=WhitelistMenu())
             await message.delete()
-
+        if '!fixTheRolesLolz' in message.content:
+            await message.channel.send(f'Walking not whitelisted roles of **{len(message.guild.members)}** members...')
+            resp = "Removed roles from:"
+            count = 0
+            for member in message.guild.members:
+                if role_not_whitelisted in member.roles:
+                    if not verif.is_verified(member.id):
+                        await member.remove_roles(role_not_whitelisted)
+                        resp+=f"\n<@{member.id}>"
+                        count +=1
+            await message.channel.send(resp)
+            await message.channel.send(f'**Done!** Removed from **{count}** members.')
+        if '!fixTheRolesPart2' in message.content:
+            correctMembers = [i for i in role_not_whitelisted.members if i not in role_verified.members]
+            await message.channel.send(f'Found **{len(correctMembers)}** members with mismatched roles.')
+            resp="Welcome"
+            for member in correctMembers:
+                await member.remove_roles(role_not_whitelisted)
+                resp+=f" <@{member.id}>"
+            resp+="! Please check <#1170861611653812244> to gain access to the server."
+            await message.channel.send(resp)
 console.print('↳ Starting bot instance!')
 
 while True:
